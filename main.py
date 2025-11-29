@@ -180,14 +180,45 @@ class ImageWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         if self.pixmap and not self.pixmap.isNull():
-            # Calculate rect to fit image while maintaining aspect ratio or fill?
-            # User wants "Window size matches image size" initially.
-            # If user resizes window, image should scale.
+            # Draw image centered and maintaining aspect ratio
             target_rect = self.rect()
             
             # Set opacity
             painter.setOpacity(self.opacity)
-            painter.drawPixmap(target_rect, self.pixmap)
+            
+            # Calculate the rectangle to draw the pixmap into, preserving aspect ratio
+            # and centering it in the widget
+            scaled_pixmap_rect = self.pixmap.scaled(
+                target_rect.size(), 
+                Qt.AspectRatioMode.KeepAspectRatio, 
+                Qt.TransformationMode.SmoothTransformation
+            ).rect()
+            
+            # Center the rect
+            scaled_pixmap_rect.moveCenter(target_rect.center())
+            
+            # Draw the pixmap into the calculated rect
+            # Note: We need to draw the source pixmap scaled into the target rect
+            # But QPainter.drawPixmap(rect, pixmap) stretches.
+            # So we rely on the aspect ratio calculation we just did.
+            # Actually, a better way with QPainter is:
+            
+            # Compute the aspect ratio correct rect
+            img_w = self.pixmap.width()
+            img_h = self.pixmap.height()
+            widget_w = target_rect.width()
+            widget_h = target_rect.height()
+            
+            scale = min(widget_w / img_w, widget_h / img_h)
+            draw_w = int(img_w * scale)
+            draw_h = int(img_h * scale)
+            
+            draw_x = int(target_rect.x() + (widget_w - draw_w) / 2)
+            draw_y = int(target_rect.y() + (widget_h - draw_h) / 2)
+            
+            draw_rect = QRect(draw_x, draw_y, draw_w, draw_h)
+            
+            painter.drawPixmap(draw_rect, self.pixmap)
         else:
             # Draw placeholder text
             painter.setPen(QColor("#666"))
@@ -344,12 +375,16 @@ class ImageOverlayApp(QMainWindow):
             img_w = pixmap.width()
             img_h = pixmap.height()
             
-            scale = 1.0
-            # Check if scaling is needed
-            if img_w > max_img_w or img_h > max_img_h:
-                ratio_w = max_img_w / img_w if img_w > 0 else 1
-                ratio_h = max_img_h / img_h if img_h > 0 else 1
-                scale = min(ratio_w, ratio_h)
+            # Calculate scale to fit within max dimensions while maintaining aspect ratio
+            scale_w = max_img_w / img_w if img_w > 0 else 1
+            scale_h = max_img_h / img_h if img_h > 0 else 1
+            
+            # Use the smaller scale factor to ensure it fits in both dimensions
+            # If scale > 1 (image is smaller than max), use 1.0 to keep original size
+            # If scale < 1 (image is larger than max), use scale to shrink
+            scale = min(scale_w, scale_h)
+            if scale > 1.0:
+                scale = 1.0
                 
             target_w = int(img_w * scale + extra_w)
             target_h = int(img_h * scale + extra_h)
