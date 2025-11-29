@@ -1,0 +1,29 @@
+How to Package Image Overlay for macOS
+
+1. Transfer the following files to your Mac:
+   - main.py
+   - requirements.txt
+
+2. Open Terminal on your Mac and navigate to the folder containing these files.
+
+3. Create a virtual environment (optional but recommended):
+   python3 -m venv venv
+   source venv/bin/activate
+
+4. Install the dependencies:
+   pip install -r requirements.txt
+   pip install pyinstaller
+
+5. Build the application:
+   pyinstaller --name "ImageOverlay" --windowed --onefile --noconsole --icon=icon.icns main.py
+
+   (Note: You can create an icon.icns file if you want a custom icon, otherwise omit --icon)
+
+6. The application will be in the "dist" folder as "ImageOverlay.app".
+
+7. You can zip this .app file and send it to your users.
+
+Note regarding Right-Click Menu on macOS:
+Unlike Windows, macOS does not use the Registry for context menus. 
+Users can simply right-click an image, select "Open With", and choose "Image Overlay". 
+They can also set it as the default application for specific image types via "Get Info".

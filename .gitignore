@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+dist/
+build/
+*.exe
+*.app
+.DS_Store
+venv/
+env/
+.env
+.vscode/
+.idea/
+error_log.txt

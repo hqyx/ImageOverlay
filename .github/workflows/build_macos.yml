@@ -1,0 +1,41 @@
+name: Build macOS App
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build with PyInstaller
+      run: |
+        # Using --onefile creates a single executable inside the .app bundle
+        pyinstaller --name "ImageOverlay" --windowed --onefile --noconsole main.py
+
+    - name: Zip the App
+      # macOS apps are folders (.app), so we need to zip them for distribution
+      run: |
+        cd dist
+        zip -r ImageOverlay_macOS.zip ImageOverlay.app
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ImageOverlay-macOS
+        path: dist/ImageOverlay_macOS.zip
