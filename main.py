@@ -311,7 +311,7 @@ class ImageOverlayApp(QMainWindow):
         # Resize Logic
         self.resizing = False
         self.resize_edge = None
-        self.resize_margin = 5
+        self.resize_margin = 10
         self.start_pos = None
         self.start_geometry = None
         self.aspect_ratio = None  # To store image aspect ratio
@@ -529,18 +529,38 @@ class ImageOverlayApp(QMainWindow):
                 new_w = int(target_content_w + extra_w)
                 new_geo.setWidth(new_w)
                 
-            # If resizing Corner, let's default to Width driving Height for stability
+            # If resizing Corner, use the dominant axis to drive the resize
             else:
-                target_content_w = w - extra_w
-                if target_content_w < 1: target_content_w = 1
-                target_content_h = target_content_w / self.aspect_ratio
-                new_h = int(target_content_h + extra_h)
+                # Calculate the change in dimensions proposed by the mouse movement
+                delta_w = abs(new_geo.width() - geo.width())
+                delta_h = abs(new_geo.height() - geo.height())
                 
-                # Adjust the corner point
-                if self.resize_edge & 4: # Top changed, we need to adjust Top to match new height
-                    new_geo.setTop(new_geo.bottom() - new_h + 1)
-                else: # Bottom changed or static, adjust Bottom
-                    new_geo.setHeight(new_h)
+                # Compare deltas to decide which axis drives.
+                # We normalize delta_h to width space for comparison: delta_h * aspect_ratio
+                # If delta_w > delta_h * aspect_ratio, width change is more significant.
+                
+                if delta_w > delta_h * self.aspect_ratio:
+                    # Width drives Height
+                    target_content_w = w - extra_w
+                    if target_content_w < 1: target_content_w = 1
+                    target_content_h = target_content_w / self.aspect_ratio
+                    new_h = int(target_content_h + extra_h)
+                    
+                    if self.resize_edge & 4: # Top
+                        new_geo.setTop(new_geo.bottom() - new_h + 1)
+                    else: # Bottom
+                        new_geo.setHeight(new_h)
+                else:
+                    # Height drives Width
+                    target_content_h = h - extra_h
+                    if target_content_h < 1: target_content_h = 1
+                    target_content_w = target_content_h * self.aspect_ratio
+                    new_w = int(target_content_w + extra_w)
+                    
+                    if self.resize_edge & 1: # Left
+                        new_geo.setLeft(new_geo.right() - new_w + 1)
+                    else: # Right
+                        new_geo.setWidth(new_w)
 
         # Minimum size check
         if new_geo.width() < 100:
