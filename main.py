@@ -310,9 +310,12 @@ class ImageOverlayApp(QMainWindow):
 
         # Resize Logic
         self.resizing = False
+        self.dragging = False
         self.resize_edge = None
         self.resize_margin = 10
         self.start_pos = None
+        self.drag_start_pos = None
+        self.window_start_pos = None
         self.start_geometry = None
         self.aspect_ratio = None  # To store image aspect ratio
         self.setMouseTracking(True)
@@ -421,11 +424,21 @@ class ImageOverlayApp(QMainWindow):
                 self.start_pos = event.globalPosition().toPoint()
                 self.start_geometry = self.geometry()
                 return
+            else:
+                # Start dragging if not resizing
+                self.dragging = True
+                self.drag_start_pos = event.globalPosition().toPoint()
+                self.window_start_pos = self.pos()
+                return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self.resizing:
             self.handle_resize(event.globalPosition().toPoint())
+        elif self.dragging:
+            # Handle dragging
+            delta = event.globalPosition().toPoint() - self.drag_start_pos
+            self.move(self.window_start_pos + delta)
         else:
             self.update_cursor(event.position().toPoint())
         super().mouseMoveEvent(event)
@@ -433,6 +446,7 @@ class ImageOverlayApp(QMainWindow):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.resizing = False
+            self.dragging = False
             self.resize_edge = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseReleaseEvent(event)
