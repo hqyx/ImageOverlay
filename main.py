@@ -323,6 +323,13 @@ class ImageOverlayApp(QMainWindow):
         self.container_frame.setMouseTracking(True)
         self.image_widget.setMouseTracking(True)
 
+        # Install event filter to handle dragging from anywhere
+        self.central_widget.installEventFilter(self)
+        self.container_frame.installEventFilter(self)
+        self.image_widget.installEventFilter(self)
+        self.bottom_bar.installEventFilter(self)
+        self.opacity_label.installEventFilter(self)
+
         # Load initial image
         if len(sys.argv) > 1:
             file_path = sys.argv[1]
@@ -415,41 +422,64 @@ class ImageOverlayApp(QMainWindow):
         self.image_widget.set_opacity(opacity)
 
     # --- Manual Resize Logic ---
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.handle_mouse_press(event.globalPosition().toPoint())
+                return True
+        elif event.type() == QEvent.Type.MouseMove:
+            self.handle_mouse_move(event.globalPosition().toPoint())
+            # We consume mouse move to ensure custom cursor and drag works consistently
+            # across all filtered widgets.
+            return True
+        elif event.type() == QEvent.Type.MouseButtonRelease:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.handle_mouse_release()
+                return True
+        return super().eventFilter(obj, event)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            edge = self.get_resize_edge(event.position().toPoint())
-            if edge:
-                self.resizing = True
-                self.resize_edge = edge
-                self.start_pos = event.globalPosition().toPoint()
-                self.start_geometry = self.geometry()
-                return
-            else:
-                # Start dragging if not resizing
-                self.dragging = True
-                self.drag_start_pos = event.globalPosition().toPoint()
-                self.window_start_pos = self.pos()
-                return
+            self.handle_mouse_press(event.globalPosition().toPoint())
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self.resizing:
-            self.handle_resize(event.globalPosition().toPoint())
-        elif self.dragging:
-            # Handle dragging
-            delta = event.globalPosition().toPoint() - self.drag_start_pos
-            self.move(self.window_start_pos + delta)
-        else:
-            self.update_cursor(event.position().toPoint())
+        self.handle_mouse_move(event.globalPosition().toPoint())
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.resizing = False
-            self.dragging = False
-            self.resize_edge = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.handle_mouse_release()
         super().mouseReleaseEvent(event)
+
+    def handle_mouse_press(self, global_pos):
+        local_pos = self.mapFromGlobal(global_pos)
+        edge = self.get_resize_edge(local_pos)
+        if edge:
+            self.resizing = True
+            self.resize_edge = edge
+            self.start_pos = global_pos
+            self.start_geometry = self.geometry()
+        else:
+            self.dragging = True
+            self.drag_start_pos = global_pos
+            self.window_start_pos = self.pos()
+
+    def handle_mouse_move(self, global_pos):
+        if self.resizing:
+            self.handle_resize(global_pos)
+        elif self.dragging:
+            delta = global_pos - self.drag_start_pos
+            self.move(self.window_start_pos + delta)
+        else:
+            local_pos = self.mapFromGlobal(global_pos)
+            self.update_cursor(local_pos)
+
+    def handle_mouse_release(self):
+        self.resizing = False
+        self.dragging = False
+        self.resize_edge = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def get_resize_edge(self, pos):
         x = pos.x()
