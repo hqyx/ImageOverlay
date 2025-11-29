@@ -327,12 +327,44 @@ class ImageOverlayApp(QMainWindow):
         # Total Vertical Extra = 30 (Title) + 30 (Bottom) + 8 (Border) + 10 (ResizeHandleMargin) = 78
         # Total Horizontal Extra = 8 (Border) + 10 (ResizeHandleMargin) = 18
         
-        target_w = pixmap.width() + 18
-        target_h = pixmap.height() + 78
+        extra_w = 18
+        extra_h = 78
         
-        # Limit max size to screen size to avoid craziness?
-        # For now, just set it.
-        self.resize(target_w, target_h)
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geo = screen.availableGeometry()
+            # Use 85% of screen size as maximum to ensure borders are visible
+            max_w = screen_geo.width() * 0.85
+            max_h = screen_geo.height() * 0.85
+            
+            # Calculate max allowable image size
+            max_img_w = max_w - extra_w
+            max_img_h = max_h - extra_h
+            
+            img_w = pixmap.width()
+            img_h = pixmap.height()
+            
+            scale = 1.0
+            # Check if scaling is needed
+            if img_w > max_img_w or img_h > max_img_h:
+                ratio_w = max_img_w / img_w if img_w > 0 else 1
+                ratio_h = max_img_h / img_h if img_h > 0 else 1
+                scale = min(ratio_w, ratio_h)
+                
+            target_w = int(img_w * scale + extra_w)
+            target_h = int(img_h * scale + extra_h)
+            
+            self.resize(target_w, target_h)
+            
+            # Center the window on screen
+            x = screen_geo.x() + (screen_geo.width() - target_w) // 2
+            y = screen_geo.y() + (screen_geo.height() - target_h) // 2
+            self.move(x, y)
+        else:
+            # Fallback if no screen info
+            target_w = pixmap.width() + 18
+            target_h = pixmap.height() + 78
+            self.resize(target_w, target_h)
 
     def open_file_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Images (*.png *.jpg *.jpeg *.bmp *.gif)")
