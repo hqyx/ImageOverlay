@@ -3,7 +3,7 @@ import os
 import platform
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QFileDialog, 
                              QVBoxLayout, QHBoxLayout, QWidget, QSlider, QPushButton, QFrame, QMenu, QMessageBox)
-from PyQt6.QtCore import Qt, QPoint, QEvent, QSize, QRect
+from PyQt6.QtCore import Qt, QPoint, QEvent, QSize, QRect, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QAction, QIcon, QCursor, QColor, QPainter, QPalette
 
 # Platform-specific imports
@@ -615,6 +615,15 @@ class ImageOverlayApp(QMainWindow):
         self.setGeometry(new_geo)
 
 
+class ImageApplication(QApplication):
+    file_opened = pyqtSignal(str)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.FileOpen:
+            self.file_opened.emit(event.file().toLocalFile())
+            return True
+        return super().event(event)
+
 
 if __name__ == "__main__":
     try:
@@ -622,8 +631,12 @@ if __name__ == "__main__":
             register_context_menu()
             sys.exit()
 
-        app = QApplication(sys.argv)
+        app = ImageApplication(sys.argv)
         window = ImageOverlayApp()
+        
+        # Connect signal for macOS file open
+        app.file_opened.connect(window.load_image)
+        
         window.show()
         sys.exit(app.exec())
     except Exception as e:
