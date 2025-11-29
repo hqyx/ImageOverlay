@@ -620,7 +620,8 @@ class ImageApplication(QApplication):
 
     def event(self, event):
         if event.type() == QEvent.Type.FileOpen:
-            self.file_opened.emit(event.file().toLocalFile())
+            # event.file() returns the file path as a string
+            self.file_opened.emit(event.file())
             return True
         return super().event(event)
 

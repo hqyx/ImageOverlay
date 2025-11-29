@@ -26,7 +26,17 @@ jobs:
     - name: Build with PyInstaller
       run: |
         # Using the spec file to include Info.plist configurations
-        pyinstaller macos.spec
+        # Use python -m to ensure we use the correct environment
+        python -m PyInstaller --clean --noconfirm macos.spec
+
+    - name: Verify App Bundle
+      run: |
+        if [ -d "dist/ImageOverlay.app" ]; then
+          echo "App bundle created successfully."
+        else
+          echo "Error: App bundle not found!"
+          exit 1
+        fi
 
     - name: Zip the App
       # macOS apps are folders (.app), so we need to zip them for distribution
