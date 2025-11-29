@@ -7,10 +7,13 @@ from PyQt6.QtCore import Qt, QPoint, QEvent, QSize, QRect, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QAction, QIcon, QCursor, QColor, QPainter, QPalette
 
 # Platform-specific imports
-if platform.system() == "Windows":
-    import ctypes
+import ctypes
+try:
     from ctypes import wintypes
     import winreg
+except ImportError:
+    # Windows-specific modules might not be available on other platforms
+    pass
 
 def is_admin():
     if platform.system() == "Windows":
