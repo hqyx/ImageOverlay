@@ -283,6 +283,7 @@ class ImageOverlayApp(QMainWindow):
         self.resize_margin = 5
         self.start_pos = None
         self.start_geometry = None
+        self.aspect_ratio = None  # To store image aspect ratio
         self.setMouseTracking(True)
         self.central_widget.setMouseTracking(True)
         self.container_frame.setMouseTracking(True)
@@ -305,6 +306,10 @@ class ImageOverlayApp(QMainWindow):
         pixmap = QPixmap.fromImage(image)
         self.image_widget.set_image(pixmap)
         self.title_bar.title_label.setText(os.path.basename(file_path))
+        
+        # Store aspect ratio (width / height)
+        if pixmap.height() > 0:
+            self.aspect_ratio = pixmap.width() / pixmap.height()
         
         # Change background to transparent (visually hidden) but keeping the frame visible
         # The user wants the background to be transparent so they can see through it.
@@ -403,6 +408,7 @@ class ImageOverlayApp(QMainWindow):
         new_geo = QRect(geo)
 
         # 1: Left, 2: Right, 4: Top, 8: Bottom
+        # Calculate rough new geometry first
         if self.resize_edge & 1: # Left
             new_geo.setLeft(geo.left() + diff.x())
         elif self.resize_edge & 2: # Right
@@ -412,6 +418,62 @@ class ImageOverlayApp(QMainWindow):
             new_geo.setTop(geo.top() + diff.y())
         elif self.resize_edge & 8: # Bottom
             new_geo.setBottom(geo.bottom() + diff.y())
+
+        # Enforce Aspect Ratio if image is loaded
+        if self.aspect_ratio:
+            # If dragging a corner, we prioritize Width or Height based on movement?
+            # Or simpler: Prioritize Width change for Left/Right edges, Height for Top/Bottom.
+            # For corners, let's drive by Width.
+            
+            # Calculate current content area size (excluding chrome)
+            # But here we are resizing the whole window.
+            # The image aspect ratio applies to the image area.
+            # However, our layout has fixed margins/chrome.
+            # TitleBar (30) + BottomBar (30) + Borders (8) = 68 vertical extra
+            # Borders (8) = 8 horizontal extra (Wait, in load_image we used 18 and 78?)
+            # Let's re-check load_image calc:
+            # target_w = pixmap.width() + 18
+            # target_h = pixmap.height() + 78
+            # So Extra_W = 18, Extra_H = 78
+            
+            extra_w = 18
+            extra_h = 78
+            
+            # Get new proposed dimensions
+            w = new_geo.width()
+            h = new_geo.height()
+            
+            # content_w / content_h = aspect_ratio
+            # (w - extra_w) / (h - extra_h) = aspect_ratio
+            
+            # If resizing Left/Right (Edge 1 or 2), Width drives Height
+            if self.resize_edge in [1, 2]:
+                target_content_w = w - extra_w
+                if target_content_w < 1: target_content_w = 1
+                target_content_h = target_content_w / self.aspect_ratio
+                new_h = int(target_content_h + extra_h)
+                new_geo.setHeight(new_h)
+                
+            # If resizing Top/Bottom (Edge 4 or 8), Height drives Width
+            elif self.resize_edge in [4, 8]:
+                target_content_h = h - extra_h
+                if target_content_h < 1: target_content_h = 1
+                target_content_w = target_content_h * self.aspect_ratio
+                new_w = int(target_content_w + extra_w)
+                new_geo.setWidth(new_w)
+                
+            # If resizing Corner, let's default to Width driving Height for stability
+            else:
+                target_content_w = w - extra_w
+                if target_content_w < 1: target_content_w = 1
+                target_content_h = target_content_w / self.aspect_ratio
+                new_h = int(target_content_h + extra_h)
+                
+                # Adjust the corner point
+                if self.resize_edge & 4: # Top changed, we need to adjust Top to match new height
+                    new_geo.setTop(new_geo.bottom() - new_h + 1)
+                else: # Bottom changed or static, adjust Bottom
+                    new_geo.setHeight(new_h)
 
         # Minimum size check
         if new_geo.width() < 100:

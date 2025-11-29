@@ -25,8 +25,8 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        # Using --onefile creates a single executable inside the .app bundle
-        pyinstaller --name "ImageOverlay" --windowed --onefile --noconsole main.py
+        # Using the spec file to include Info.plist configurations
+        pyinstaller macos.spec
 
     - name: Zip the App
       # macOS apps are folders (.app), so we need to zip them for distribution
