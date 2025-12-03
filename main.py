@@ -4,7 +4,7 @@ import platform
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QFileDialog, 
                              QVBoxLayout, QHBoxLayout, QWidget, QSlider, QPushButton, QFrame, QMenu, QMessageBox)
 from PyQt6.QtCore import Qt, QPoint, QEvent, QSize, QRect, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage, QAction, QIcon, QCursor, QColor, QPainter, QPalette
+from PyQt6.QtGui import QPixmap, QImage, QAction, QIcon, QCursor, QColor, QPainter, QPalette, QTransform
 
 # Platform-specific imports
 import ctypes
@@ -290,14 +290,35 @@ class ImageOverlayApp(QMainWindow):
         # Usually traditional software has controls. Let's put a bottom control bar.
         
         self.bottom_bar = QWidget()
-        self.bottom_bar.setFixedHeight(30)
+        # Allow dynamic height, but we can set a fixed height if needed. 
+        # Let's just let the layout decide, but give it a minimum to look good.
         self.bottom_bar.setStyleSheet("background-color: #f0f0f0;")
-        self.bottom_layout = QHBoxLayout(self.bottom_bar)
-        self.bottom_layout.setContentsMargins(10, 0, 10, 0)
+        self.bottom_layout = QVBoxLayout(self.bottom_bar)
+        self.bottom_layout.setContentsMargins(10, 5, 10, 5)
+        self.bottom_layout.setSpacing(5)
         
+        # Rotation Buttons
+        self.rotation_layout = QHBoxLayout()
+        self.rotation_layout.addStretch()
+        
+        self.btn_rotate_ccw = QPushButton("↺ Left")
+        self.btn_rotate_ccw.setToolTip("Rotate Counter-Clockwise")
+        self.btn_rotate_ccw.clicked.connect(lambda: self.rotate_image(-90))
+        self.rotation_layout.addWidget(self.btn_rotate_ccw)
+        
+        self.btn_rotate_cw = QPushButton("↻ Right")
+        self.btn_rotate_cw.setToolTip("Rotate Clockwise")
+        self.btn_rotate_cw.clicked.connect(lambda: self.rotate_image(90))
+        self.rotation_layout.addWidget(self.btn_rotate_cw)
+        
+        self.rotation_layout.addStretch()
+        self.bottom_layout.addLayout(self.rotation_layout)
+
+        # Opacity Slider
+        self.slider_layout = QHBoxLayout()
         self.opacity_label = QLabel("Opacity:")
         self.opacity_label.setStyleSheet("color: #333;")
-        self.bottom_layout.addWidget(self.opacity_label)
+        self.slider_layout.addWidget(self.opacity_label)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(10, 100)
@@ -307,7 +328,9 @@ class ImageOverlayApp(QMainWindow):
             QSlider::groove:horizontal { border: 1px solid #ccc; height: 8px; background: #e0e0e0; margin: 2px 0; border-radius: 4px; }
             QSlider::handle:horizontal { background: #fff; border: 1px solid #999; width: 18px; height: 18px; margin: -2px 0; border-radius: 9px; }
         """)
-        self.bottom_layout.addWidget(self.opacity_slider)
+        self.slider_layout.addWidget(self.opacity_slider)
+        
+        self.bottom_layout.addLayout(self.slider_layout)
         
         self.container_layout.addWidget(self.bottom_bar)
 
@@ -364,15 +387,21 @@ class ImageOverlayApp(QMainWindow):
         self.container_frame.setStyleSheet("background-color: rgba(255, 255, 255, 0.01); border: 4px solid #d0d0d0; border-radius: 0px;")
 
         # Resize window to fit image + decorations
-        # Title Bar (30) + Bottom Bar (30) 
+        # Title Bar (30) + Bottom Bar (Dynamic) 
         # Container Border (4px * 2 = 8px vertical, 8px horizontal)
         # Main Layout margins (5px * 2 = 10px)
         
-        # Total Vertical Extra = 30 (Title) + 30 (Bottom) + 8 (Border) + 10 (ResizeHandleMargin) = 78
-        # Total Horizontal Extra = 8 (Border) + 10 (ResizeHandleMargin) = 18
-        
         extra_w = 18
-        extra_h = 78
+        
+        # Calculate extra_h dynamically
+        title_h = self.title_bar.height()
+        bottom_h = self.bottom_bar.sizeHint().height()
+        # If sizeHint is too small (e.g. before layout), estimate it.
+        # Buttons (~30) + Slider (~30) + Spacing/Margins (~10) -> ~70
+        if bottom_h < 50: 
+            bottom_h = 70
+            
+        extra_h = title_h + bottom_h + 18
         
         screen = QApplication.primaryScreen()
         if screen:
@@ -410,9 +439,78 @@ class ImageOverlayApp(QMainWindow):
             self.move(x, y)
         else:
             # Fallback if no screen info
-            target_w = pixmap.width() + 18
-            target_h = pixmap.height() + 78
+            target_w = pixmap.width() + extra_w
+            target_h = pixmap.height() + extra_h
             self.resize(target_w, target_h)
+
+    def rotate_image(self, angle):
+        if not self.image_widget.pixmap or self.image_widget.pixmap.isNull():
+            return
+
+        # Rotate the pixmap
+        transform = QTransform().rotate(angle)
+        new_pixmap = self.image_widget.pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+        self.image_widget.set_image(new_pixmap)
+
+        # Update aspect ratio
+        if new_pixmap.height() > 0:
+            self.aspect_ratio = new_pixmap.width() / new_pixmap.height()
+
+        # Adjust window dimensions to match rotation (swap content width/height)
+        geo = self.geometry()
+        w = geo.width()
+        h = geo.height()
+        
+        # Calculate chrome dimensions
+        extra_w = 18
+        title_h = self.title_bar.height()
+        bottom_h = self.bottom_bar.height()
+        if bottom_h < 50: bottom_h = 70 # Fallback if somehow 0
+        extra_h = title_h + bottom_h + 18
+        
+        # Current content size
+        content_w = max(1, w - extra_w)
+        content_h = max(1, h - extra_h)
+        
+        # Calculate scale based on aspect ratio to ensure we don't distort
+        # Actually, we just want to swap the bounding box of the content?
+        # If we rotate 90deg, the new content width should be old content height * (something?)
+        # No, if we physically rotate the image, the image width becomes height, height becomes width.
+        # So we should just swap content_w and content_h.
+        
+        # But wait, if the window was resized to not match the image aspect ratio (e.g. with black bars or empty space),
+        # simply swapping might be weird.
+        # But let's assume the user wants to see the image.
+        
+        new_content_w = content_h
+        new_content_h = content_w
+        
+        # Calculate new window size
+        new_w = new_content_w + extra_w
+        new_h = new_content_h + extra_h
+        
+        # Ensure it fits on screen
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geo = screen.availableGeometry()
+            # If too big, scale down maintaining new aspect ratio
+            if new_w > screen_geo.width() or new_h > screen_geo.height():
+                 scale_w = screen_geo.width() / new_w
+                 scale_h = screen_geo.height() / new_h
+                 scale = min(scale_w, scale_h, 1.0)
+                 new_w = int(new_w * scale)
+                 new_h = int(new_h * scale)
+        
+        # Center on previous center
+        center = geo.center()
+        new_geo = QRect(0, 0, new_w, new_h)
+        new_geo.moveCenter(center)
+        
+        # Ensure top-left is on screen
+        if new_geo.left() < screen_geo.left(): new_geo.moveLeft(screen_geo.left())
+        if new_geo.top() < screen_geo.top(): new_geo.moveTop(screen_geo.top())
+        
+        self.setGeometry(new_geo)
 
     def open_file_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Images (*.png *.jpg *.jpeg *.bmp *.gif)")
