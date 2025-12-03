@@ -290,47 +290,39 @@ class ImageOverlayApp(QMainWindow):
         # Usually traditional software has controls. Let's put a bottom control bar.
         
         self.bottom_bar = QWidget()
-        # Allow dynamic height, but we can set a fixed height if needed. 
-        # Let's just let the layout decide, but give it a minimum to look good.
+        self.bottom_bar.setFixedHeight(35) # Fixed compact height
         self.bottom_bar.setStyleSheet("background-color: #f0f0f0;")
-        self.bottom_layout = QVBoxLayout(self.bottom_bar)
-        self.bottom_layout.setContentsMargins(10, 5, 10, 5)
-        self.bottom_layout.setSpacing(5)
+        self.bottom_layout = QHBoxLayout(self.bottom_bar)
+        self.bottom_layout.setContentsMargins(5, 0, 5, 0)
+        self.bottom_layout.setSpacing(10)
         
         # Rotation Buttons
-        self.rotation_layout = QHBoxLayout()
-        self.rotation_layout.addStretch()
-        
-        self.btn_rotate_ccw = QPushButton("↺ Left")
-        self.btn_rotate_ccw.setToolTip("Rotate Counter-Clockwise")
+        self.btn_rotate_ccw = QPushButton("↺")
+        self.btn_rotate_ccw.setFixedSize(30, 25)
+        self.btn_rotate_ccw.setToolTip("Rotate Left")
         self.btn_rotate_ccw.clicked.connect(lambda: self.rotate_image(-90))
-        self.rotation_layout.addWidget(self.btn_rotate_ccw)
+        self.bottom_layout.addWidget(self.btn_rotate_ccw)
         
-        self.btn_rotate_cw = QPushButton("↻ Right")
-        self.btn_rotate_cw.setToolTip("Rotate Clockwise")
+        self.btn_rotate_cw = QPushButton("↻")
+        self.btn_rotate_cw.setFixedSize(30, 25)
+        self.btn_rotate_cw.setToolTip("Rotate Right")
         self.btn_rotate_cw.clicked.connect(lambda: self.rotate_image(90))
-        self.rotation_layout.addWidget(self.btn_rotate_cw)
-        
-        self.rotation_layout.addStretch()
-        self.bottom_layout.addLayout(self.rotation_layout)
+        self.bottom_layout.addWidget(self.btn_rotate_cw)
 
         # Opacity Slider
-        self.slider_layout = QHBoxLayout()
         self.opacity_label = QLabel("Opacity:")
         self.opacity_label.setStyleSheet("color: #333;")
-        self.slider_layout.addWidget(self.opacity_label)
+        self.bottom_layout.addWidget(self.opacity_label)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(10, 100)
         self.opacity_slider.setValue(100)
         self.opacity_slider.valueChanged.connect(self.change_opacity)
         self.opacity_slider.setStyleSheet("""
-            QSlider::groove:horizontal { border: 1px solid #ccc; height: 8px; background: #e0e0e0; margin: 2px 0; border-radius: 4px; }
-            QSlider::handle:horizontal { background: #fff; border: 1px solid #999; width: 18px; height: 18px; margin: -2px 0; border-radius: 9px; }
+            QSlider::groove:horizontal { border: 1px solid #ccc; height: 6px; background: #e0e0e0; margin: 2px 0; border-radius: 3px; }
+            QSlider::handle:horizontal { background: #fff; border: 1px solid #999; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
         """)
-        self.slider_layout.addWidget(self.opacity_slider)
-        
-        self.bottom_layout.addLayout(self.slider_layout)
+        self.bottom_layout.addWidget(self.opacity_slider)
         
         self.container_layout.addWidget(self.bottom_bar)
 
@@ -395,11 +387,8 @@ class ImageOverlayApp(QMainWindow):
         
         # Calculate extra_h dynamically
         title_h = self.title_bar.height()
-        bottom_h = self.bottom_bar.sizeHint().height()
-        # If sizeHint is too small (e.g. before layout), estimate it.
-        # Buttons (~30) + Slider (~30) + Spacing/Margins (~10) -> ~70
-        if bottom_h < 50: 
-            bottom_h = 70
+        bottom_h = self.bottom_bar.height()
+        if bottom_h < 35: bottom_h = 35 # Use fixed height for fallback
             
         extra_h = title_h + bottom_h + 18
         
@@ -465,7 +454,7 @@ class ImageOverlayApp(QMainWindow):
         extra_w = 18
         title_h = self.title_bar.height()
         bottom_h = self.bottom_bar.height()
-        if bottom_h < 50: bottom_h = 70 # Fallback if somehow 0
+        if bottom_h < 35: bottom_h = 35
         extra_h = title_h + bottom_h + 18
         
         # Current content size
