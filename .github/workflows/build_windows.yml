@@ -25,7 +25,7 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --clean --noconfirm ImageOverlay.spec
+        python -m PyInstaller --clean --noconfirm --onefile --windowed --name "ImageOverlay" --add-data "软件使用说明.txt;." main.py
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4

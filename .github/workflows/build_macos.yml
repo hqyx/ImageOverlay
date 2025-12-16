@@ -25,9 +25,9 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        # Using the spec file to include Info.plist configurations
         # Use python -m to ensure we use the correct environment
-        python -m PyInstaller --clean --noconfirm macos.spec
+        # Note: Separator for add-data is : on Unix/Mac
+        python -m PyInstaller --clean --noconfirm --windowed --name "ImageOverlay" --add-data "软件使用说明.txt:." main.py
 
     - name: Verify App Bundle
       run: |
