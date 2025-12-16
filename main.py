@@ -1,6 +1,7 @@
 import sys
 import os
 import platform
+import json
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QFileDialog, 
                              QVBoxLayout, QHBoxLayout, QWidget, QSlider, QPushButton, QFrame, QMenu, QMessageBox)
 from PyQt6.QtCore import Qt, QPoint, QEvent, QSize, QRect, pyqtSignal
@@ -12,8 +13,69 @@ try:
     from ctypes import wintypes
     import winreg
 except ImportError:
-    # Windows-specific modules might not be available on other platforms
     pass
+
+WINDOW_STATE_FILE = os.path.join(os.path.expanduser("~"), ".image_overlay_state.json")
+
+
+def load_window_state():
+    try:
+        with open(WINDOW_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_window_state(geometry):
+    try:
+        data = {
+            "x": geometry.x(),
+            "y": geometry.y(),
+            "w": geometry.width(),
+            "h": geometry.height(),
+        }
+        with open(WINDOW_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def get_other_window_rects(window_title, current_hwnd):
+    if platform.system() != "Windows":
+        return []
+    try:
+        user32 = ctypes.windll.user32
+    except Exception:
+        return []
+    if "wintypes" not in globals():
+        return []
+
+    results = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def enum_proc(hwnd, l_param):
+        if hwnd == current_hwnd:
+            return True
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        if buffer.value != window_title:
+            return True
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return True
+        results.append(rect)
+        return True
+
+    try:
+        user32.EnumWindows(enum_proc, 0)
+    except Exception:
+        return []
+    return results
 
 def is_admin():
     if platform.system() == "Windows":
@@ -166,15 +228,27 @@ class ImageWidget(QWidget):
         super().__init__(parent)
         self.pixmap = None
         self.opacity = 1.0
+        self.scale_factor = 1.0
+        self.offset = QPoint(0, 0)
+        self.pan_active = False
+        self.last_mouse_pos = None
         self.setAcceptDrops(True)
         self.parent_window = parent
 
     def set_image(self, pixmap):
         self.pixmap = pixmap
+        self.scale_factor = 1.0
+        self.offset = QPoint(0, 0)
         self.update()
 
     def set_opacity(self, opacity):
         self.opacity = opacity
+        self.update()
+
+    def set_scale_factor(self, factor):
+        if factor < 0.1:
+            factor = 0.1
+        self.scale_factor = factor
         self.update()
 
     def paintEvent(self, event):
@@ -183,49 +257,56 @@ class ImageWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         if self.pixmap and not self.pixmap.isNull():
-            # Draw image centered and maintaining aspect ratio
-            target_rect = self.rect()
-            
-            # Set opacity
             painter.setOpacity(self.opacity)
-            
-            # Calculate the rectangle to draw the pixmap into, preserving aspect ratio
-            # and centering it in the widget
-            scaled_pixmap_rect = self.pixmap.scaled(
-                target_rect.size(), 
-                Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.SmoothTransformation
-            ).rect()
-            
-            # Center the rect
-            scaled_pixmap_rect.moveCenter(target_rect.center())
-            
-            # Draw the pixmap into the calculated rect
-            # Note: We need to draw the source pixmap scaled into the target rect
-            # But QPainter.drawPixmap(rect, pixmap) stretches.
-            # So we rely on the aspect ratio calculation we just did.
-            # Actually, a better way with QPainter is:
-            
-            # Compute the aspect ratio correct rect
+            target_rect = self.rect()
             img_w = self.pixmap.width()
             img_h = self.pixmap.height()
+            if img_w <= 0 or img_h <= 0:
+                return
             widget_w = target_rect.width()
             widget_h = target_rect.height()
-            
-            scale = min(widget_w / img_w, widget_h / img_h)
+            base_scale = min(widget_w / img_w, widget_h / img_h)
+            if base_scale <= 0:
+                base_scale = 1.0
+            scale = base_scale * self.scale_factor
             draw_w = int(img_w * scale)
             draw_h = int(img_h * scale)
-            
-            draw_x = int(target_rect.x() + (widget_w - draw_w) / 2)
-            draw_y = int(target_rect.y() + (widget_h - draw_h) / 2)
-            
+            center = target_rect.center()
+            center_x = center.x() + self.offset.x()
+            center_y = center.y() + self.offset.y()
+            draw_x = int(center_x - draw_w / 2)
+            draw_y = int(center_y - draw_h / 2)
             draw_rect = QRect(draw_x, draw_y, draw_w, draw_h)
-            
             painter.drawPixmap(draw_rect, self.pixmap)
         else:
-            # Draw placeholder text
             painter.setPen(QColor("#666"))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Drag & Drop Image Here")
+
+    def mousePressEvent(self, event):
+        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
+            self.pan_active = True
+            self.last_mouse_pos = event.position().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.pan_active and self.last_mouse_pos is not None:
+            current_pos = event.position().toPoint()
+            delta = current_pos - self.last_mouse_pos
+            self.offset += delta
+            self.last_mouse_pos = current_pos
+            self.update()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
+            self.pan_active = False
+            self.last_mouse_pos = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            super().mouseReleaseEvent(event)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -249,24 +330,18 @@ class ImageOverlayApp(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        # Default window size
         self.resize(500, 400)
+        self.saved_window_state = load_window_state()
 
-        # Main Layout
         self.central_widget = QWidget()
-        # Set almost transparent background for central widget to ensure mouse events are captured
-        # in the resize margin area.
         self.central_widget.setStyleSheet("background-color: rgba(255, 255, 255, 0.01);")
         self.setCentralWidget(self.central_widget)
         
-        # Use a frame for the visible border
         self.main_layout = QVBoxLayout(self.central_widget)
-        self.main_layout.setContentsMargins(5, 5, 5, 5) # Margin for resize handles
+        self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_layout.setSpacing(0)
 
-        # Container Frame (The "Opaque Border" look)
         self.container_frame = QFrame()
-        # Initial state: Opaque background because no image is loaded yet.
         self.container_frame.setStyleSheet("background-color: #f0f0f0; border: 4px solid #d0d0d0; border-radius: 0px;")
         self.container_layout = QVBoxLayout(self.container_frame)
         self.container_layout.setContentsMargins(0, 0, 0, 0)
@@ -323,6 +398,20 @@ class ImageOverlayApp(QMainWindow):
             QSlider::handle:horizontal { background: #fff; border: 1px solid #999; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
         """)
         self.bottom_layout.addWidget(self.opacity_slider)
+
+        self.zoom_label = QLabel("Zoom:")
+        self.zoom_label.setStyleSheet("color: #333;")
+        self.bottom_layout.addWidget(self.zoom_label)
+
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(10, 300)
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.valueChanged.connect(self.change_zoom)
+        self.zoom_slider.setStyleSheet("""
+            QSlider::groove:horizontal { border: 1px solid #ccc; height: 6px; background: #e0e0e0; margin: 2px 0; border-radius: 3px; }
+            QSlider::handle:horizontal { background: #fff; border: 1px solid #999; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
+        """)
+        self.bottom_layout.addWidget(self.zoom_slider)
         
         self.container_layout.addWidget(self.bottom_bar)
 
@@ -366,29 +455,17 @@ class ImageOverlayApp(QMainWindow):
         self.image_widget.set_image(pixmap)
         self.title_bar.title_label.setText(os.path.basename(file_path))
         
-        # Store aspect ratio (width / height)
         if pixmap.height() > 0:
             self.aspect_ratio = pixmap.width() / pixmap.height()
         
-        # Change background to transparent (visually hidden) but keeping the frame visible
-        # The user wants the background to be transparent so they can see through it.
-        # We use rgba(255, 255, 255, 0.01) (1% opacity white) to ensure the window still captures 
-        # mouse events (drag/drop) on Windows with WA_TranslucentBackground.
-        # Note: '1' in rgba usually means 100% opacity in some contexts if interpreted as integer,
-        # so we use 0.01 to be safe and ensure it is effectively invisible.
         self.container_frame.setStyleSheet("background-color: rgba(255, 255, 255, 0.01); border: 4px solid #d0d0d0; border-radius: 0px;")
 
-        # Resize window to fit image + decorations
-        # Title Bar (30) + Bottom Bar (Dynamic) 
-        # Container Border (4px * 2 = 8px vertical, 8px horizontal)
-        # Main Layout margins (5px * 2 = 10px)
-        
         extra_w = 18
         
-        # Calculate extra_h dynamically
         title_h = self.title_bar.height()
         bottom_h = self.bottom_bar.height()
-        if bottom_h < 35: bottom_h = 35 # Use fixed height for fallback
+        if bottom_h < 35:
+            bottom_h = 35
             
         extra_h = title_h + bottom_h + 18
         
@@ -406,28 +483,37 @@ class ImageOverlayApp(QMainWindow):
             img_w = pixmap.width()
             img_h = pixmap.height()
             
-            # Calculate scale to fit within max dimensions while maintaining aspect ratio
             scale_w = max_img_w / img_w if img_w > 0 else 1
             scale_h = max_img_h / img_h if img_h > 0 else 1
             
-            # Use the smaller scale factor to ensure it fits in both dimensions
-            # If scale > 1 (image is smaller than max), use 1.0 to keep original size
-            # If scale < 1 (image is larger than max), use scale to shrink
             scale = min(scale_w, scale_h)
             if scale > 1.0:
                 scale = 1.0
-                
+            
             target_w = int(img_w * scale + extra_w)
             target_h = int(img_h * scale + extra_h)
             
             self.resize(target_w, target_h)
-            
-            # Center the window on screen
-            x = screen_geo.x() + (screen_geo.width() - target_w) // 2
-            y = screen_geo.y() + (screen_geo.height() - target_h) // 2
-            self.move(x, y)
+
+            if self.saved_window_state:
+                x = int(self.saved_window_state.get("x", screen_geo.x()))
+                y = int(self.saved_window_state.get("y", screen_geo.y()))
+                max_x = screen_geo.x() + screen_geo.width() - target_w
+                max_y = screen_geo.y() + screen_geo.height() - target_h
+                if x < screen_geo.x():
+                    x = screen_geo.x()
+                if y < screen_geo.y():
+                    y = screen_geo.y()
+                if x > max_x:
+                    x = max_x
+                if y > max_y:
+                    y = max_y
+                self.move(x, y)
+            else:
+                x = screen_geo.x() + (screen_geo.width() - target_w) // 2
+                y = screen_geo.y() + (screen_geo.height() - target_h) // 2
+                self.move(x, y)
         else:
-            # Fallback if no screen info
             target_w = pixmap.width() + extra_w
             target_h = pixmap.height() + extra_h
             self.resize(target_w, target_h)
@@ -436,21 +522,17 @@ class ImageOverlayApp(QMainWindow):
         if not self.image_widget.pixmap or self.image_widget.pixmap.isNull():
             return
 
-        # Rotate the pixmap
         transform = QTransform().rotate(angle)
         new_pixmap = self.image_widget.pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
         self.image_widget.set_image(new_pixmap)
 
-        # Update aspect ratio
         if new_pixmap.height() > 0:
             self.aspect_ratio = new_pixmap.width() / new_pixmap.height()
 
-        # Adjust window dimensions to match rotation (swap content width/height)
         geo = self.geometry()
         w = geo.width()
         h = geo.height()
         
-        # Calculate chrome dimensions
         extra_w = 18
         title_h = self.title_bar.height()
         bottom_h = self.bottom_bar.height()
@@ -460,16 +542,6 @@ class ImageOverlayApp(QMainWindow):
         # Current content size
         content_w = max(1, w - extra_w)
         content_h = max(1, h - extra_h)
-        
-        # Calculate scale based on aspect ratio to ensure we don't distort
-        # Actually, we just want to swap the bounding box of the content?
-        # If we rotate 90deg, the new content width should be old content height * (something?)
-        # No, if we physically rotate the image, the image width becomes height, height becomes width.
-        # So we should just swap content_w and content_h.
-        
-        # But wait, if the window was resized to not match the image aspect ratio (e.g. with black bars or empty space),
-        # simply swapping might be weird.
-        # But let's assume the user wants to see the image.
         
         new_content_w = content_h
         new_content_h = content_w
@@ -482,7 +554,6 @@ class ImageOverlayApp(QMainWindow):
         screen = QApplication.primaryScreen()
         if screen:
             screen_geo = screen.availableGeometry()
-            # If too big, scale down maintaining new aspect ratio
             if new_w > screen_geo.width() or new_h > screen_geo.height():
                  scale_w = screen_geo.width() / new_w
                  scale_h = screen_geo.height() / new_h
@@ -490,12 +561,10 @@ class ImageOverlayApp(QMainWindow):
                  new_w = int(new_w * scale)
                  new_h = int(new_h * scale)
         
-        # Center on previous center
         center = geo.center()
         new_geo = QRect(0, 0, new_w, new_h)
         new_geo.moveCenter(center)
         
-        # Ensure top-left is on screen
         if new_geo.left() < screen_geo.left(): new_geo.moveLeft(screen_geo.left())
         if new_geo.top() < screen_geo.top(): new_geo.moveTop(screen_geo.top())
         
@@ -507,9 +576,12 @@ class ImageOverlayApp(QMainWindow):
             self.load_image(file_path)
 
     def change_opacity(self, value):
-        # Only change the image opacity, not the window
         opacity = value / 100.0
         self.image_widget.set_opacity(opacity)
+
+    def change_zoom(self, value):
+        factor = value / 100.0
+        self.image_widget.set_scale_factor(factor)
 
     # --- Manual Resize Logic ---
     def eventFilter(self, obj, event):
@@ -517,15 +589,19 @@ class ImageOverlayApp(QMainWindow):
             if event.button() == Qt.MouseButton.LeftButton:
                 self.handle_mouse_press(event.globalPosition().toPoint())
                 return True
+            if obj is self.image_widget and event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
+                return False
         elif event.type() == QEvent.Type.MouseMove:
+            if obj is self.image_widget and event.buttons() & (Qt.MouseButton.MiddleButton | Qt.MouseButton.RightButton):
+                return False
             self.handle_mouse_move(event.globalPosition().toPoint())
-            # We consume mouse move to ensure custom cursor and drag works consistently
-            # across all filtered widgets.
             return True
         elif event.type() == QEvent.Type.MouseButtonRelease:
             if event.button() == Qt.MouseButton.LeftButton:
                 self.handle_mouse_release()
                 return True
+            if obj is self.image_widget and event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
+                return False
         return super().eventFilter(obj, event)
 
     def mousePressEvent(self, event):
@@ -566,10 +642,14 @@ class ImageOverlayApp(QMainWindow):
             self.update_cursor(local_pos)
 
     def handle_mouse_release(self):
+        was_dragging = self.dragging
         self.resizing = False
         self.dragging = False
         self.resize_edge = None
         self.setCursor(Qt.CursorShape.ArrowCursor)
+        if was_dragging:
+            self.snap_to_other_windows()
+        save_window_state(self.geometry())
 
     def get_resize_edge(self, pos):
         x = pos.x()
@@ -703,6 +783,35 @@ class ImageOverlayApp(QMainWindow):
             new_geo.setHeight(100)
 
         self.setGeometry(new_geo)
+
+    def snap_to_other_windows(self):
+        if platform.system() != "Windows":
+            return
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        rects = get_other_window_rects(self.windowTitle(), hwnd)
+        if not rects:
+            return
+        own_geo = self.frameGeometry()
+        best_rect = None
+        best_overlap = 0
+        for r in rects:
+            other_rect = QRect(r.left, r.top, r.right - r.left, r.bottom - r.top)
+            if not own_geo.intersects(other_rect):
+                continue
+            intersected = own_geo.intersected(other_rect)
+            overlap = intersected.width() * intersected.height()
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_rect = other_rect
+        if best_rect and best_overlap > 0:
+            self.setGeometry(best_rect)
+
+    def closeEvent(self, event):
+        save_window_state(self.geometry())
+        super().closeEvent(event)
 
 
 class ImageApplication(QApplication):
