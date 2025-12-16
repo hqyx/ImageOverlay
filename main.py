@@ -66,13 +66,11 @@ def get_other_window_rects(current_hwnd):
         
         # Check for our specific window title signature
         title = buffer.value
-        if not (title == "Image Overlay" or title.endswith(" - Image Overlay")):
-            return True
-            
-        rect = wintypes.RECT()
-        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-            return True
-        results.append(rect)
+        if "Image Overlay" in title: # Relaxed check
+             rect = wintypes.RECT()
+             if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                 results.append(rect)
+        
         return True
 
     try:
@@ -231,7 +229,11 @@ class TitleBar(QWidget):
             self.parent.move(self.parent_pos + delta)
 
     def mouseReleaseEvent(self, event):
+        was_dragging = self.start_pos is not None
         self.start_pos = None
+        if was_dragging:
+            self.parent.snap_to_other_windows()
+            save_window_state(self.parent.geometry())
 
 
 class ImageWidget(QWidget):
@@ -324,17 +326,23 @@ class ImageWidget(QWidget):
         else:
             super().mouseReleaseEvent(event)
 
-    def contextMenuEvent(self, event):
-        menu = QMenu(self)
-        action_restore = QAction("Restore Image (Fit to Window)", self)
-        action_restore.triggered.connect(self.restore_image)
-        menu.addAction(action_restore)
-        menu.exec(event.globalPos())
-
     def restore_image(self):
         self.scale_factor = 1.0
         self.offset = QPoint(0, 0)
         self.update()
+        
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        # Apply the same stylesheet as the title bar menu
+        menu.setStyleSheet("""
+            QMenu { background-color: #f0f0f0; color: #333; border: 1px solid #ccc; }
+            QMenu::item { padding: 5px 20px; }
+            QMenu::item:selected { background-color: #ddd; }
+        """)
+        action_restore = QAction("Restore Image (Fit to Window)", self)
+        action_restore.triggered.connect(self.restore_image)
+        menu.addAction(action_restore)
+        menu.exec(event.globalPos())
 
 
     def dragEnterEvent(self, event):
@@ -529,17 +537,26 @@ class ImageOverlayApp(QMainWindow):
             # This ensures new instances overlap with existing ones, but dropping a new image 
             # into an existing window doesn't force it to jump to another window's position.
             snapped_to_existing = False
-            if not self.isVisible():
-                try:
-                    hwnd = int(self.winId())
-                    other_rects = get_other_window_rects(hwnd)
-                    if other_rects:
-                        # Pick the first one (top-most in Z-order usually)
-                        r = other_rects[0]
-                        self.setGeometry(r.left, r.top, r.right - r.left, r.bottom - r.top)
-                        snapped_to_existing = True
-                except Exception:
-                    pass
+            
+            # Try to snap to existing windows even if visible, but usually this block runs on init
+            try:
+                hwnd = int(self.winId())
+                other_rects = get_other_window_rects(hwnd)
+                if other_rects:
+                    # Pick the first one (top-most in Z-order usually)
+                    r = other_rects[0]
+                    
+                    # Convert physical RECT to logical geometry
+                    dpr = self.devicePixelRatio()
+                    new_x = int(r.left / dpr)
+                    new_y = int(r.top / dpr)
+                    new_w = int((r.right - r.left) / dpr)
+                    new_h = int((r.bottom - r.top) / dpr)
+                    
+                    self.setGeometry(new_x, new_y, new_w, new_h)
+                    snapped_to_existing = True
+            except Exception:
+                pass
 
             if not snapped_to_existing:
                 self.resize(target_w, target_h)
@@ -846,46 +863,33 @@ class ImageOverlayApp(QMainWindow):
             return
             
         own_geo = self.frameGeometry()
-        center = own_geo.center()
-        
+        own_area = own_geo.width() * own_geo.height()
+        if own_area == 0:
+            return
+
         best_rect = None
-        min_dist = float('inf')
-        found_overlap = False
+        max_overlap_ratio = 0.0
+        
+        dpr = self.devicePixelRatio()
         
         for r in rects:
-            other_rect = QRect(r.left, r.top, r.right - r.left, r.bottom - r.top)
+            # Convert physical RECT to logical QRect
+            other_rect = QRect(int(r.left / dpr), int(r.top / dpr), 
+                               int((r.right - r.left) / dpr), int((r.bottom - r.top) / dpr))
             
-            # Check for intersection first
-            if own_geo.intersects(other_rect):
-                # If we intersect, prefer the one with most overlap?
-                # Or just take the first one?
-                # Let's calculate distance between centers as tie-breaker or main metric
-                pass
-            
-            other_center = other_rect.center()
-            dx = center.x() - other_center.x()
-            dy = center.y() - other_center.y()
-            dist_sq = dx*dx + dy*dy
-            
-            if dist_sq < min_dist:
-                min_dist = dist_sq
-                best_rect = other_rect
-        
-        # Snap if close enough or overlapping
-        # Threshold: Centers within 200 pixels, or check intersection
-        if best_rect:
-            should_snap = False
-            
-            # If centers are reasonably close (e.g. user trying to align them)
-            if min_dist < 200 * 200:
-                should_snap = True
-            
-            # Or if they are actually overlapping
-            if not should_snap and own_geo.intersects(best_rect):
-                should_snap = True
+            # Calculate intersection
+            intersection = own_geo.intersected(other_rect)
+            if not intersection.isEmpty():
+                overlap_area = intersection.width() * intersection.height()
+                ratio = overlap_area / own_area
                 
-            if should_snap:
-                self.setGeometry(best_rect)
+                if ratio > max_overlap_ratio:
+                    max_overlap_ratio = ratio
+                    best_rect = other_rect
+        
+        # Snap if overlap is greater than 35%
+        if best_rect and max_overlap_ratio > 0.35:
+            self.setGeometry(best_rect)
 
     def closeEvent(self, event):
         save_window_state(self.geometry())
