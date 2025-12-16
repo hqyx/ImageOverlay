@@ -40,7 +40,7 @@ def save_window_state(geometry):
         pass
 
 
-def get_other_window_rects(window_title, current_hwnd):
+def get_other_window_rects(current_hwnd):
     if platform.system() != "Windows":
         return []
     try:
@@ -63,8 +63,12 @@ def get_other_window_rects(window_title, current_hwnd):
             return True
         buffer = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buffer, length + 1)
-        if buffer.value != window_title:
+        
+        # Check for our specific window title signature
+        title = buffer.value
+        if not (title == "Image Overlay" or title.endswith(" - Image Overlay")):
             return True
+            
         rect = wintypes.RECT()
         if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
             return True
@@ -101,15 +105,22 @@ def register_context_menu():
         msg.exec()
         return
 
-    exe_path = sys.executable
-    # If we are running as a script, we might not want to register python.exe, 
-    # but for the sake of the standalone app, sys.executable will be the ImageOverlay.exe
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        exe_path = sys.executable
+        command_str = f'"{exe_path}" "%1"'
+    else:
+        # Running as script
+        exe_path = sys.executable
+        script_path = os.path.abspath(__file__)
+        command_str = f'"{exe_path}" "{script_path}" "%1"'
     
     if not is_admin():
         # Re-run with admin rights
         # We pass a special flag to know we should run registration
         print("Requesting admin privileges...")
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, "--register-context-menu", None, 1)
+        # Use shell execution to elevate
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
         return
 
     key_path = r"*\shell\OpenWithImageOverlay"
@@ -117,16 +128,16 @@ def register_context_menu():
         # Create the main key
         key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, key_path)
         winreg.SetValue(key, "", winreg.REG_SZ, "Open with Image Overlay")
-        winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, exe_path)
+        # Use the executable icon
+        icon_path = sys.executable if getattr(sys, 'frozen', False) else "shell32.dll,1"
+        winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_path)
         winreg.CloseKey(key)
 
         # Create the command key
         command_key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, key_path + r"\command")
-        winreg.SetValue(command_key, "", winreg.REG_SZ, f'"{exe_path}" "%1"')
+        winreg.SetValue(command_key, "", winreg.REG_SZ, command_str)
         winreg.CloseKey(command_key)
         
-        # Show a message box? Since we are in a GUI app or transient process.
-        # If this is a separate process, a simple ctypes messagebox works.
         ctypes.windll.user32.MessageBoxW(0, "Successfully added to right-click menu!", "Success", 0)
         
     except Exception as e:
@@ -283,10 +294,15 @@ class ImageWidget(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Drag & Drop Image Here")
 
     def mousePressEvent(self, event):
-        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
+        if event.button() == Qt.MouseButton.MiddleButton:
             self.pan_active = True
             self.last_mouse_pos = event.position().toPoint()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif event.button() == Qt.MouseButton.RightButton:
+             # Right click for context menu, handled in contextMenuEvent or release?
+             # Standard Qt handles context menu on release or specialized event.
+             # We just ignore it here so we don't start panning.
+             pass
         else:
             super().mousePressEvent(event)
 
@@ -301,12 +317,25 @@ class ImageWidget(QWidget):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
+        if event.button() == Qt.MouseButton.MiddleButton:
             self.pan_active = False
             self.last_mouse_pos = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
         else:
             super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        action_restore = QAction("Restore Image (Fit to Window)", self)
+        action_restore.triggered.connect(self.restore_image)
+        menu.addAction(action_restore)
+        menu.exec(event.globalPos())
+
+    def restore_image(self):
+        self.scale_factor = 1.0
+        self.offset = QPoint(0, 0)
+        self.update()
+
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -453,7 +482,10 @@ class ImageOverlayApp(QMainWindow):
 
         pixmap = QPixmap.fromImage(image)
         self.image_widget.set_image(pixmap)
-        self.title_bar.title_label.setText(os.path.basename(file_path))
+        
+        title_text = f"{os.path.basename(file_path)} - Image Overlay"
+        self.title_bar.title_label.setText(title_text)
+        self.setWindowTitle(title_text)
         
         if pixmap.height() > 0:
             self.aspect_ratio = pixmap.width() / pixmap.height()
@@ -493,26 +525,43 @@ class ImageOverlayApp(QMainWindow):
             target_w = int(img_w * scale + extra_w)
             target_h = int(img_h * scale + extra_h)
             
-            self.resize(target_w, target_h)
+            # Check for existing windows to snap to (Only if window is not yet visible/newly created)
+            # This ensures new instances overlap with existing ones, but dropping a new image 
+            # into an existing window doesn't force it to jump to another window's position.
+            snapped_to_existing = False
+            if not self.isVisible():
+                try:
+                    hwnd = int(self.winId())
+                    other_rects = get_other_window_rects(hwnd)
+                    if other_rects:
+                        # Pick the first one (top-most in Z-order usually)
+                        r = other_rects[0]
+                        self.setGeometry(r.left, r.top, r.right - r.left, r.bottom - r.top)
+                        snapped_to_existing = True
+                except Exception:
+                    pass
 
-            if self.saved_window_state:
-                x = int(self.saved_window_state.get("x", screen_geo.x()))
-                y = int(self.saved_window_state.get("y", screen_geo.y()))
-                max_x = screen_geo.x() + screen_geo.width() - target_w
-                max_y = screen_geo.y() + screen_geo.height() - target_h
-                if x < screen_geo.x():
-                    x = screen_geo.x()
-                if y < screen_geo.y():
-                    y = screen_geo.y()
-                if x > max_x:
-                    x = max_x
-                if y > max_y:
-                    y = max_y
-                self.move(x, y)
-            else:
-                x = screen_geo.x() + (screen_geo.width() - target_w) // 2
-                y = screen_geo.y() + (screen_geo.height() - target_h) // 2
-                self.move(x, y)
+            if not snapped_to_existing:
+                self.resize(target_w, target_h)
+
+                if self.saved_window_state:
+                    x = int(self.saved_window_state.get("x", screen_geo.x()))
+                    y = int(self.saved_window_state.get("y", screen_geo.y()))
+                    max_x = screen_geo.x() + screen_geo.width() - target_w
+                    max_y = screen_geo.y() + screen_geo.height() - target_h
+                    if x < screen_geo.x():
+                        x = screen_geo.x()
+                    if y < screen_geo.y():
+                        y = screen_geo.y()
+                    if x > max_x:
+                        x = max_x
+                    if y > max_y:
+                        y = max_y
+                    self.move(x, y)
+                else:
+                    x = screen_geo.x() + (screen_geo.width() - target_w) // 2
+                    y = screen_geo.y() + (screen_geo.height() - target_h) // 2
+                    self.move(x, y)
         else:
             target_w = pixmap.width() + extra_w
             target_h = pixmap.height() + extra_h
@@ -791,23 +840,52 @@ class ImageOverlayApp(QMainWindow):
             hwnd = int(self.winId())
         except Exception:
             return
-        rects = get_other_window_rects(self.windowTitle(), hwnd)
+        # Updated to use the new signature (no title needed)
+        rects = get_other_window_rects(hwnd)
         if not rects:
             return
+            
         own_geo = self.frameGeometry()
+        center = own_geo.center()
+        
         best_rect = None
-        best_overlap = 0
+        min_dist = float('inf')
+        found_overlap = False
+        
         for r in rects:
             other_rect = QRect(r.left, r.top, r.right - r.left, r.bottom - r.top)
-            if not own_geo.intersects(other_rect):
-                continue
-            intersected = own_geo.intersected(other_rect)
-            overlap = intersected.width() * intersected.height()
-            if overlap > best_overlap:
-                best_overlap = overlap
+            
+            # Check for intersection first
+            if own_geo.intersects(other_rect):
+                # If we intersect, prefer the one with most overlap?
+                # Or just take the first one?
+                # Let's calculate distance between centers as tie-breaker or main metric
+                pass
+            
+            other_center = other_rect.center()
+            dx = center.x() - other_center.x()
+            dy = center.y() - other_center.y()
+            dist_sq = dx*dx + dy*dy
+            
+            if dist_sq < min_dist:
+                min_dist = dist_sq
                 best_rect = other_rect
-        if best_rect and best_overlap > 0:
-            self.setGeometry(best_rect)
+        
+        # Snap if close enough or overlapping
+        # Threshold: Centers within 200 pixels, or check intersection
+        if best_rect:
+            should_snap = False
+            
+            # If centers are reasonably close (e.g. user trying to align them)
+            if min_dist < 200 * 200:
+                should_snap = True
+            
+            # Or if they are actually overlapping
+            if not should_snap and own_geo.intersects(best_rect):
+                should_snap = True
+                
+            if should_snap:
+                self.setGeometry(best_rect)
 
     def closeEvent(self, event):
         save_window_state(self.geometry())
